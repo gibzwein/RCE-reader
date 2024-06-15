@@ -7,6 +7,15 @@ import machine, neopixel
 import utime
 import ntptime
 
+# import wifimgr
+# from time import sleep
+# import machine
+
+# try:
+#   import usocket as socket
+# except:
+#   import socket
+
 from machine import Pin, SoftI2C
 
 last_hour_change = 0
@@ -17,6 +26,7 @@ password = credentials.password
 
 # WiFi config
 sta = network.WLAN(network.STA_IF)
+print(sta.ifconfig())
 
 # LED Config
 led_pin = 2 
@@ -31,6 +41,56 @@ i2c_devices = i2c.scan()
 print(i2c_devices)
 if len(i2c_devices) != 0:
     oled = ssd1306.SSD1306_I2C(oled_width, oled_height, i2c)
+
+# Configuration for timezone and daylight saving
+TIMEZONE_OFFSET = 1  # Offset in hours from UTC (standard time)
+DAYLIGHT_SAVING_OFFSET = 1  # Additional offset during daylight saving time
+
+def is_daylight_saving():
+    # Implement a method to determine if daylight saving time is in effect
+    # For simplicity, assume daylight saving time is in effect from the last Sunday in March to the last Sunday in October
+    current_date = utime.localtime()
+    year = current_date[0]
+    month = current_date[1]
+    day = current_date[2]
+    weekday = current_date[6]
+
+    if month < 3 or month > 10:
+        return False
+    if month > 3 and month < 10:
+        return True
+    
+    # Calculate last Sunday of March
+    last_sunday_march = 31 - (utime.mktime((year, 3, 31, 0, 0, 0, 0, 0)) // 86400 + 3) % 7
+    # Calculate last Sunday of October
+    last_sunday_october = 31 - (utime.mktime((year, 10, 31, 0, 0, 0, 0, 0)) // 86400 + 3) % 7
+
+    if month == 3 and day > last_sunday_march:
+        return True
+    if month == 10 and day <= last_sunday_october:
+        return False
+    if month == 3 and day <= last_sunday_march:
+        return False
+    if month == 10 and day > last_sunday_october:
+        return True
+
+    return False
+
+def get_local_time():
+    current_time = utime.time()
+    local_time = current_time + TIMEZONE_OFFSET * 3600
+    if is_daylight_saving():
+        local_time += DAYLIGHT_SAVING_OFFSET * 3600
+    return utime.localtime(local_time)
+
+# wlan = wifimgr.get_connection()
+# if wlan is None:
+#     print("Could not initialize the network connection.")
+#     while True:
+#         pass  # you shall not pass :D
+
+# # Main Code goes here, wlan is a working network.WLAN(STA_IF) instance.
+# print("ESP OK")
 
 def wifi_connect():
     try:
@@ -53,12 +113,14 @@ def wifi_connect():
             oled.text('WiFi Connected', 0, 0)
             oled.show()
             time.sleep(1)
+            full_loop()
         else:
             print("\nFailed to connect to WiFi.")
             oled.fill(0)
             oled.text('WiFi Failed', 0, 0)
             oled.show()
             time.sleep(1)
+            wifi_connect()
     except OSError as e:
         print(f"\nOSError: {e}")
         oled.fill(0)
@@ -70,14 +132,14 @@ def wifi_connect():
         wifi_connect()
 
 def get_current_hour():
-    current_datetime = time.localtime(time.time() + 3600)
-    formatted_hour = current_datetime[3]
-    print('Current hour:', formatted_hour+2)
+    local_time = get_local_time()
+    formatted_hour = local_time[3]
+    print('Current hour:', formatted_hour)
     return formatted_hour
 
 def get_current_date():
-    current_datetime = time.localtime()
-    formatted_date = f"{current_datetime[0]:04}{current_datetime[1]:02}{current_datetime[2]:02}"
+    local_time = get_local_time()
+    formatted_date = f"{local_time[0]:04}{local_time[1]:02}{local_time[2]:02}"
     print('Current date:', formatted_date)
     return formatted_date
 
@@ -133,7 +195,7 @@ def calculate_average(data):
 
 def get_data_for_hour(data, hour):
     for entry in data:
-        if entry['hour'] == hour + 2:  # 22:00 -> 22:59 is 23 hour
+        if entry['hour'] == hour + 1:  # 22:00 -> 22:59 is 22 hour
             return entry
     return None
 
@@ -168,9 +230,16 @@ def display_data(price_data, price):
 def full_loop():
     try:
         current_hour = get_current_hour()
+        oled.fill(0)
+        oled.text('Fetching data', 0, 0)
+        oled.show()
         data = get_data()
         if data is None:
             print("Error to retrieve data.")
+            oled.fill(0)
+            oled.text('No data from PSE', 0, 0)
+            oled.show()
+            time.sleep(1)
             return
         parsed_data = parse_data(data)
         if not parsed_data:
@@ -191,10 +260,10 @@ def check_hour_change():
     global last_hour_change
     global current_hour
     last_hour_change = time.time()
-    hour = utime.localtime()[3]
+    hour = get_local_time()[3]
     if hour != current_hour:
         current_hour = hour
-        print(f"Hour changed: {current_hour + 3}")
+        print(f"Hour changed: {current_hour}")
         full_loop()
     else:
         print("Hour not changed")
